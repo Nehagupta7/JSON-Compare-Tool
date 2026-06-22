@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo, useEffect } from "react";
 import { useDarkMode } from "../hooks/Usedarkmode";
 
 /**
@@ -499,6 +499,9 @@ export default function JsonCompare() {
     const [dataB, setDataB] = useState(null);
     const [mode, setMode] = useState("diff"); // "diff" | "card"
     const [expanded, setExpanded] = useState(new Set());
+    const [shareUrl, setShareUrl] = useState("");
+    const [shareError, setShareError] = useState("");
+    const [loadingShare, setLoadingShare] = useState(false);
 
     const toggle = useCallback((path) => {
         setExpanded((prev) => {
@@ -516,6 +519,8 @@ export default function JsonCompare() {
     const runCompare = useCallback(() => {
         setErrA("");
         setErrB("");
+        setShareUrl("");
+        setShareError("");
 
         if (!rawA.trim() || !rawB.trim()) {
             if (!rawA.trim()) setErrA("Paste a JSON object to compare");
@@ -577,6 +582,8 @@ export default function JsonCompare() {
         setErrB("");
         setDataA(null);
         setDataB(null);
+        setShareUrl("");
+        setShareError("");
         setExpanded(new Set());
     }, []);
 
@@ -614,6 +621,63 @@ export default function JsonCompare() {
     const collapseAll = useCallback(() => setExpanded(new Set()), []);
 
     const hasOutput = dataA !== null && dataB !== null;
+
+    useEffect(() => {
+        const url = new URL(window.location.href);
+        const id = url.searchParams.get("shareId");
+        if (!id) return;
+
+        const fetchShared = async () => {
+            setLoadingShare(true);
+            setShareError("");
+            try {
+                const res = await fetch(`http://127.0.0.1:8000/json/${id}`);
+                if (!res.ok) {
+                    throw new Error(`Could not load shared comparison (${res.status})`);
+                }
+                const data = await res.json();
+                setRawA(JSON.stringify(data.json1, null, 2));
+                setRawB(JSON.stringify(data.json2, null, 2));
+                setDataA(data.json1);
+                setDataB(data.json2);
+                const autoExpand = new Set();
+                collectChangedPaths(data.json1, data.json2, "root", autoExpand);
+                setExpanded(autoExpand);
+                setShareUrl(window.location.href);
+            } catch (err) {
+                setShareError(err.message || "Failed to load shared comparison.");
+            } finally {
+                setLoadingShare(false);
+            }
+        };
+
+        fetchShared();
+    }, []);
+
+    const handleShare = useCallback(async () => {
+        if (!dataA || !dataB) return;
+        setLoadingShare(true);
+        setShareError("");
+        try {
+            const res = await fetch("http://127.0.0.1:8000/json", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ json1: dataA, json2: dataB, comparison_result: null }),
+            });
+            if (!res.ok) {
+                throw new Error(`Failed to share comparison (${res.status})`);
+            }
+            const data = await res.json();
+            const shareId = data.id;
+            const shareLink = `${window.location.origin}${window.location.pathname}?shareId=${shareId}`;
+            setShareUrl(shareLink);
+            window.history.replaceState(null, "", shareLink);
+        } catch (err) {
+            setShareError(err.message || "Unable to create share link.");
+        } finally {
+            setLoadingShare(false);
+        }
+    }, [dataA, dataB]);
 
     return (
         <div className="min-h-screen bg-gray-50 dark:bg-gray-950 transition-colors">
@@ -704,7 +768,25 @@ export default function JsonCompare() {
                             Clear
                         </button>
                     )}
+                    {hasOutput && (
+                        <button
+                            onClick={handleShare}
+                            disabled={loadingShare}
+                            className="px-3.5 py-1.5 text-sm rounded-md border border-blue-300 dark:border-blue-700 bg-blue-50 dark:bg-blue-950 text-blue-700 dark:text-blue-300 font-medium hover:bg-blue-100 dark:hover:bg-blue-900 disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                            {loadingShare ? "Sharing..." : "Share"}
+                        </button>
+                    )}
                 </div>
+
+                {shareError && (
+                    <div className="mb-3 text-sm text-red-600 dark:text-red-300">{shareError}</div>
+                )}
+                {shareUrl && (
+                    <div className="mb-3 text-sm text-gray-700 dark:text-gray-300 break-words">
+                        Share link: <a href={shareUrl} className="text-blue-600 dark:text-blue-300 underline" target="_blank" rel="noreferrer">{shareUrl}</a>
+                    </div>
+                )}
 
                 {/* Summary bar */}
                 {hasOutput && (
